@@ -488,6 +488,11 @@ final class BeaconModel: ObservableObject {
         HookIntegration.deployBridge()
         refreshIntegrationStatus()
         startHookWatcher()
+
+        // Watch coding agents by default (persisted): a beacon that starts off isn't
+        // much of a beacon. The user can still turn it off and that choice sticks.
+        autoWatchEnabled = Self.loadAutoWatch()
+        if autoWatchEnabled { startAgentWatcher() }
     }
 
     private func startHookWatcher() {
@@ -787,6 +792,14 @@ final class BeaconModel: ObservableObject {
         return names
     }
 
+    private static let autoWatchKey = "autoWatchEnabled"
+    /// Whether to watch agents on launch. Defaults to ON the first time so the beacon
+    /// is useful out of the box; afterwards it honours the user's saved choice.
+    private static func loadAutoWatch() -> Bool {
+        if UserDefaults.standard.object(forKey: autoWatchKey) == nil { return true }
+        return UserDefaults.standard.bool(forKey: autoWatchKey)
+    }
+
     private static let alertVolumeKey = "alertVolume"
     private static let soundProfileKey = "soundProfile"
     private static let customSoundsKey = "customSoundNames"
@@ -838,6 +851,7 @@ final class BeaconModel: ObservableObject {
     }
 
     func setAutoWatch(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: Self.autoWatchKey)
         enabled ? startAgentWatcher() : stopWatching()
     }
 
