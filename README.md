@@ -1,173 +1,175 @@
-# Bugu / 布谷
+<p align="center">
+  <img src="Assets/bugu-logo.png" alt="Bugu" width="160">
+</p>
 
-Bugu is a small macOS menu bar app for long-running local coding agents. The
-Chinese name is `布谷`: a tiny coding clock that chirps when a task is accepted,
-keeps a quiet heartbeat while work continues, and calls back with a different
-sound when the task changes state.
+<h1 align="center">Bugu · 布谷</h1>
 
-MVP behavior:
+<p align="center">
+  <strong>A sound beacon for your long-running coding agents.</strong>
+  <br>
+  A tiny native macOS menu-bar app that keeps your Mac awake and chirps when an
+  agent starts, finishes, needs permission, or gets interrupted — so you can walk
+  away and still know what your agents are doing.
+  <br><br>
+  <strong>English</strong> | <a href="README.zh-CN.md">中文</a>
+</p>
 
-- Starts macOS IOKit power assertions to reduce sleep interruptions.
-- Plays short state cues at a user-controlled alert volume.
-- Separates five task states: accepted, running, completed, interrupted, and
-  permission needed.
-- Uses familiar Apple system sounds for all five states so they are easier to
-  distinguish without learning a new sound language.
-- Supports heartbeat intervals: 10s, 30s, 1m, 5m, 10m, and 30m.
-- Watches common local coding agent processes and chirps when a new session
-  starts.
-- Does not use voice/TTS by default, so headphone disconnects do not turn status
-  updates into loud spoken alerts.
+<p align="center">
+  <a href="https://github.com/LearnPrompt/bugu/releases/latest"><img src="https://img.shields.io/github/v/release/LearnPrompt/bugu?style=flat-square&label=release&color=blue" alt="Latest Release"></a>
+  <a href="https://github.com/LearnPrompt/bugu/stargazers"><img src="https://img.shields.io/github/stars/LearnPrompt/bugu?style=flat-square&color=yellow" alt="Stars"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-black?style=flat-square&logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/SwiftUI-native-orange?style=flat-square&logo=swift" alt="SwiftUI">
+</p>
 
-The default sound direction uses macOS built-in alert sounds: short, clear,
-event-specific cues that do not steal focus. Bugu also ships the optional
-"Bugu Pack" — five original, hand-picked sounds provided by the project — for
-users who want a warmer, more recognizable set of state cues. Bugu does not
-copy Vibe Island or Claude audio, or use voice/TTS.
+<p align="center">
+  <a href="https://github.com/LearnPrompt/bugu/releases">Download</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#supported-agents">Supported Agents</a> ·
+  <a href="#how-it-works">How It Works</a>
+</p>
 
-## Status Sounds
+---
 
-Two sound packs are included. The default uses macOS built-in alert sounds; the
-"Bugu Pack" uses original MP3 cues provided by the project. You can switch
-between them from the menu bar window.
+## What is Bugu?
 
-| State | Meaning | System Sound | Bugu Pack |
-| --- | --- | --- | --- |
-| Accepted | A new coding agent task was detected | Funk | start |
-| Running | The watched task is still active | Hero | continue |
-| Completed | The watched task ended normally | Blow | success |
-| Interrupted | The watched task stopped unexpectedly | Basso | end |
-| Permission needed | The task needs user approval | Ping | need |
+When you hand a long task to a coding agent — Claude Code, Codex, Kimi, and friends —
+you either babysit the terminal or wander off and lose track. Bugu solves the
+"wander off" half: it lives in your menu bar, **keeps the Mac awake** while agents
+work, and gives each state change its **own short sound**. You hear a task finish
+from the next room, glance at the menu, and **click straight back** to the right
+terminal tab.
 
-All five cues are played once via `NSSound`. The System pack uses built-in
-sound names; the Bugu Pack loads `*.mp3` files bundled in the app.
+The name is `布谷` — the cuckoo bird: a small clock that chirps when something
+changes and is otherwise quiet.
 
-The `Alert volume` slider applies to all five states. It defaults to 65%, can be
-set from 20% to 100%, and is saved between launches.
+Where notch-panel apps (like [Vibe Island](https://vibeisland.app/)) put a visual
+control surface on screen, Bugu is **sound-first** — the one channel you can still
+perceive with the lid closed or your eyes elsewhere.
 
-The app icon is generated from an original local drawing script:
+## Why Bugu?
 
-```bash
-python3 script/generate_app_icon.py
-```
+- **Sound-first** — five distinct cues (accepted / running / done / interrupted /
+  permission) so you don't need to be looking at the screen.
+- **Keeps your Mac awake** — IOKit power assertions hold off sleep while an agent
+  runs, and release automatically when it's done.
+- **Native & tiny** — SwiftUI + AppKit menu-bar app, no Electron, no server, no
+  account, no telemetry. Everything runs locally.
+- **Multi-agent** — detects 20+ coding agents and installs optional hooks across a
+  14-agent roster for instant, accurate events.
+- **Click-to-jump** — a recent-sessions list reads your local transcripts and jumps
+  back to the exact terminal tab in one click.
+- **Three sound packs** — Apple system sounds, the original **Bugu Pack**, or your
+  own per-state Custom mix.
 
-Closed-lid force-awake behavior is intentionally not enabled in the MVP. It can
-increase heat and battery risk, and usually needs a separate privileged `pmset`
-or helper-tool path, so it should be added later as an explicit experimental
-mode with clear safety copy.
+## Supported Agents
 
-## Run
+**Hook integration (14 — instant, accurate events):** Claude Code, Codex,
+Gemini CLI, Cursor Agent, Trae, Droid (Factory), Qoder, Qwen, Kimi, Kimi Code,
+Mistral Vibe, CodeBuddy, WorkBuddy, Kiro CLI.
 
-```bash
-./script/build_and_run.sh
-```
+**Also auto-detected by the watcher:** OpenCode, Hermes, Pi Agent, Aider, Goose,
+Amp, Crush, Devin, OpenHands.
 
-Verify process launch:
+<details>
+<summary>Terminals &amp; jump-back support</summary>
 
-```bash
-./script/build_and_run.sh --verify
-```
+| Host | Jump-back |
+|---|---|
+| **Terminal.app** | Exact tab via TTY targeting |
+| **iTerm2** | Exact session via TTY matching |
+| **Warp** | Precise tab via the `bugu:<project>` title the hook bridge stamps + AX menu click |
+| **Ghostty** | Precise tab via title match + AX raise |
+| **Desktop-app hosts** (e.g. Claude.app) | Activates the host GUI app by walking the agent's parent-process chain |
+| **Other terminals/IDEs** | Activates the running host app |
 
-Scan currently visible coding agents:
+Bugu **only ever activates an app that is already running** — it never spawns a
+stray terminal when it can't resolve the exact tab.
 
-```bash
-$(swift build --show-bin-path)/CodeBeacon --scan-agents
-```
+</details>
 
-## Download a Community Build
+## Quick Start
 
-Bugu can be distributed as an unsigned community build before we add an Apple
-Developer ID certificate and notarization credentials. This keeps release costs
-at 0 USD, but macOS Gatekeeper will warn that the developer cannot be verified.
+### Option 1: Download (recommended)
 
-Build the unsigned DMG:
+1. Grab the latest **`Bugu-x.y.z.dmg`** from [Releases](https://github.com/LearnPrompt/bugu/releases).
+2. Open the DMG and drag **Bugu** into **Applications**.
+3. Because this community build isn't yet Apple-notarized, right-click
+   **Bugu.app → Open** the first time, then confirm **Open** in the dialog.
 
-```bash
-./script/release.sh --skip-notarization 0.1.1-community
-```
+> Requires **macOS 14+**.
 
-The DMG is written to:
-
-```bash
-dist/Bugu-0.1.1-community.dmg
-```
-
-To open the app after downloading:
-
-1. Mount the DMG and drag `Bugu.app` to `Applications`.
-2. Control-click or right-click `Bugu.app`, then choose `Open`.
-3. Confirm `Open` in the macOS security dialog.
-
-If macOS still blocks the app, open `System Settings` -> `Privacy & Security`
-and choose `Open Anyway` for Bugu. Advanced users can also remove the download
-quarantine flag after verifying the source:
+If macOS still blocks it, open **System Settings → Privacy & Security** and choose
+**Open Anyway**, or clear the quarantine flag after verifying the source:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Bugu.app
 ```
 
-Release-ready DMGs for broader distribution should be signed with a real
-`Developer ID Application` certificate and notarized with `notarytool`.
-
-## Current Prototype Flow
-
-1. Open the menu bar item.
-2. Toggle `Keep Mac awake`.
-3. Toggle `Watch coding agents`.
-4. Set `Alert volume`.
-5. Pick a heartbeat interval.
-6. Start a supported agent process.
-7. Wait for heartbeat audio.
-8. Let the watched agent process exit to hear the completion cue.
-9. Uncheck `Watch coding agents` to stop watching and clear the current task
-   heartbeat.
-
-`Sim Agent`, `Sim Interrupt`, and `Reset watcher` live in the Debug section.
-They test automatic detection and forced watcher cleanup without adding extra
-controls to the normal user flow.
-
-## Apple System Sounds
-
-macOS built-in alert sounds live at:
+### Option 2: Build from source
 
 ```bash
-/System/Library/Sounds
+git clone https://github.com/LearnPrompt/bugu.git
+cd bugu
+./script/build_and_run.sh
 ```
 
-List them:
+> Requires **macOS 14+** and the Xcode command-line tools (Swift 5.10+).
 
-```bash
-find /System/Library/Sounds -maxdepth 1 -type f -name '*.aiff' -print | sort
+### Turn on the basics
+
+1. Open the menu-bar bird icon.
+2. Toggle **Keep Mac awake** and **Watch coding agents**.
+3. Pick a **Sound pack** and **Alert volume**.
+4. Open **Manage agents…** to install hooks for the CLIs you use (one-click
+   *Enable all detected*). Hook edits are backed up and fully reversible.
+
+## How It Works
+
+```
+Coding agent (Claude Code / Codex / Kimi / ...)
+  │
+  ├── hook event ──▶ bugu-bridge (~/.bugu/bin) ──▶ ~/.bugu/events.jsonl
+  │                                                   │ (DispatchSource tail)
+  └── or ps/lsof polling ────────────────────────────┤
+                                                      ▼
+                                         Bugu (menu bar app)
+                                          • plays the state's sound
+                                          • holds IOKit keep-awake
+                                          • lists recent sessions
+                                          • click → jump to the terminal tab
 ```
 
-Preview one:
+Two event sources work together: **hooks** give low-latency, accurate state for
+the CLIs you opt into, and a **`ps`/`lsof` poller** covers everything else. The
+hook bridge always exits `0`, so your agents are never blocked or slowed — if Bugu
+isn't running, nothing changes for them.
 
-```bash
-afplay /System/Library/Sounds/Hero.aiff
-```
+<details>
+<summary>Sound map</summary>
 
-Open the folder in Finder:
+| State | Meaning | System | Bugu Pack |
+|---|---|---|---|
+| Accepted | a new agent task was detected | Funk | start |
+| Running | the watched task is still active (heartbeat) | Hero | continue |
+| Completed | the task ended normally | Blow | success |
+| Interrupted | the task stopped unexpectedly | Basso | end |
+| Permission needed | the task is waiting for your approval | Ping | need |
 
-```bash
-open /System/Library/Sounds
-```
+The original **Bugu Pack** sounds are made for this project. Bugu does not copy
+Vibe Island, Claude, or Apple audio, and uses no voice/TTS.
 
-## Watched Agents
+</details>
 
-The MVP watches process names/commands for:
+## Privacy
 
-- Codex
-- Claude Code
-- OpenCode
-- Aider
-- Goose
-- Gemini CLI
-- Amp
-- Qwen Code
-- Crush
-- Devin
-- Cursor Agent
-- OpenHands
+Everything runs locally. The hook bridge records only the minimum needed to drive
+the UI — source CLI, event name, working directory, session id, and TTY — to
+`~/.bugu/events.jsonl`. No prompts, tokens, secrets, account, server, or telemetry.
 
-It intentionally ignores noisy desktop helper processes from `Codex.app` and
-`Claude.app` so renderer/helper restarts do not count as new coding tasks.
+## Project Status
+
+Bugu is an early, fast-moving project from [LearnPrompt](https://github.com/LearnPrompt).
+The `v0.2` line adds the session list, click-to-jump, hook integration, and the
+Bugu Pack on top of the original keep-awake + status-sound MVP. Community builds are
+currently **unsigned** (see the Gatekeeper note above); signed + notarized builds
+will follow.
