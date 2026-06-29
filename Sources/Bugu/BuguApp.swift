@@ -1235,7 +1235,10 @@ enum AgentProcessScanner {
     private static let signatures: [Signature] = [
         Signature(name: "Codex", patterns: ["codex-agent-sim", #"(^|[/\s])codex($|\s)"#]),
         Signature(name: "Claude Code", patterns: [#"(^|[/\s])claude($|\s)"#]),
-        Signature(name: "Kimi Code", patterns: [".kimi-code/", "kimi-code", #"(^|[/\s])kimi($|\s)"#]),
+        // `.kimi-code/` is the install/config dir; the bare "kimi-code" substring is
+        // intentionally omitted because it false-matches project paths like
+        // "bugu-kimi-code-demo". The word-boundary `kimi` still catches the binary.
+        Signature(name: "Kimi Code", patterns: [".kimi-code/", #"(^|[/\s])kimi($|\s)"#]),
         Signature(name: "OpenCode", patterns: [".opencode/", #"(^|[/\s])opencode($|\s)"#]),
         Signature(name: "Gemini CLI", patterns: [#"(^|[/\s])gemini($|\s)"#]),
         Signature(name: "Cursor Agent", patterns: ["cursor-agent"]),
@@ -1277,10 +1280,14 @@ enum AgentProcessScanner {
             return []
         }
 
+        // Exclude our own process so Bugu never counts itself as an agent — e.g. the
+        // dev binary lives under a path containing "kimi-code", which would otherwise
+        // match the Kimi signature.
+        let selfPID = ProcessInfo.processInfo.processIdentifier
         let matched = output
             .split(separator: "\n", omittingEmptySubsequences: true)
             .compactMap(parseLine)
-            .filter { !shouldIgnore(command: $0.command) }
+            .filter { $0.pid != selfPID && !shouldIgnore(command: $0.command) }
             .compactMap { entry -> AgentProcess? in
                 guard let name = matchedAgentName(command: entry.command) else {
                     return nil
