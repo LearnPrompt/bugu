@@ -1,5 +1,5 @@
 import XCTest
-@testable import CodeBeacon
+@testable import Bugu
 
 final class HookActionMappingTests: XCTestCase {
 

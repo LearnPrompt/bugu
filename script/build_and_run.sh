@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODE="${1:-run}"
 APP_NAME="Bugu"
-PRODUCT_NAME="CodeBeacon"
+PRODUCT_NAME="Bugu"
 BUNDLE_ID="com.learnprompt.Bugu"
 MIN_SYSTEM_VERSION="14.0"
 VERSION="${BUGU_VERSION:-0.2.0-dev}"

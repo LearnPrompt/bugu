@@ -46,7 +46,7 @@ fi
 
 VERSION="${POSITIONAL_ARGS[0]}"
 APP_NAME="Bugu"
-PRODUCT_NAME="CodeBeacon"
+PRODUCT_NAME="Bugu"
 BUNDLE_ID="com.learnprompt.Bugu"
 MIN_SYSTEM_VERSION="14.0"
 COPYRIGHT="Copyright © $(date +%Y) LearnPrompt. All rights reserved."

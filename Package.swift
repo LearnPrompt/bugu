@@ -3,17 +3,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodeBeacon",
+    name: "Bugu",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "CodeBeacon", targets: ["CodeBeacon"])
+        .executable(name: "Bugu", targets: ["Bugu"])
     ],
     targets: [
         .executableTarget(
-            name: "CodeBeacon",
-            path: "Sources/CodeBeacon",
+            name: "Bugu",
+            path: "Sources/Bugu",
             // Declare the sound pack as a resource. SwiftPM executable targets
             // do not generate a usable Bundle.module/resource bundle, so the
             // build/release scripts copy these MP3s into the .app bundle manually.
@@ -22,9 +22,9 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "CodeBeaconTests",
-            dependencies: ["CodeBeacon"],
-            path: "Tests/CodeBeaconTests"
+            name: "BuguTests",
+            dependencies: ["Bugu"],
+            path: "Tests/BuguTests"
         )
     ]
 )

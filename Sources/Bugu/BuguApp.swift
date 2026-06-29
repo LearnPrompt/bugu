@@ -4,7 +4,7 @@ import IOKit.pwr_mgt
 import SwiftUI
 
 @main
-struct CodeBeaconApp: App {
+struct BuguApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = BeaconModel()
 
