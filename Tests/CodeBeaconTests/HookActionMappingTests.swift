@@ -41,4 +41,13 @@ final class HookActionMappingTests: XCTestCase {
         XCTAssertNil(HookActionMapping.action(for: "SomethingElse"))
         XCTAssertNil(HookActionMapping.action(for: ""))
     }
+
+    func testSessionPhaseFromAction() {
+        XCTAssertEqual(SessionPhase(.started), .running)
+        XCTAssertEqual(SessionPhase(.working), .running)
+        XCTAssertEqual(SessionPhase(.permission), .permission)
+        XCTAssertEqual(SessionPhase(.done), .done)
+        XCTAssertEqual(SessionPhase(.failed), .failed)
+        XCTAssertEqual(SessionPhase(.ended), .ended)
+    }
 }

@@ -432,6 +432,9 @@ final class BeaconModel: ObservableObject {
     private var hookWatcher: HookEventWatcher?
     /// Debounce handle for `refreshSessions()`.
     private var sessionRefreshTask: Task<Void, Never>?
+    /// Per-session phase from hooks, keyed by session identity, so concurrent agents
+    /// are tracked independently and the menu-bar state is their aggregate.
+    private var hookSessions: [String: (phase: SessionPhase, at: Date)] = [:]
     /// When the last hook event arrived. While recent, the `ps` poller defers to hooks
     /// for state and sounds so the two paths don't double-fire.
     private var lastHookEventAt: Date = .distantPast
@@ -496,12 +499,29 @@ final class BeaconModel: ObservableObject {
     }
 
     /// Drives state + sounds instantly from a CLI hook event (no polling latency).
+    ///
+    /// Each agent session is tracked independently in `hookSessions`, so when several
+    /// agents run at once one session finishing doesn't reset the others. Sounds fire
+    /// on a single session's transition; the menu-bar state is the *aggregate* across
+    /// all live sessions (any waiting → permission, else any running → running, else the
+    /// most recent terminal result).
     private func applyHookEvent(_ event: HookEventWatcher.Event) {
         guard let action = HookActionMapping.action(for: event.hookEvent) else { return }
         // Only react to CLIs the user has enabled. A stale hook left behind by a
         // since-disabled CLI must not keep driving Bugu (nil = unknown source → allow).
         if integrationStatus[event.source] == false { return }
         lastHookEventAt = Date()
+
+        let key = hookSessionKey(event)
+        let previous = hookSessions[key]?.phase
+        let phase = SessionPhase(action)
+        if phase == .ended {
+            hookSessions.removeValue(forKey: key)
+        } else {
+            hookSessions[key] = (phase: phase, at: Date())
+        }
+
+        // Per-session sound on a meaningful transition (deduped against the prior phase).
         switch action {
         case .started:
             if !keepAwakeEnabled {
@@ -509,36 +529,63 @@ final class BeaconModel: ObservableObject {
                 autoAwakeEngaged = true
                 startPowerAssertions()
             }
-            taskState = .running(startedAt: Date())
+            // Chirp only for a genuinely new or restarted session, not every turn.
+            if previous == nil || previous == .done || previous == .failed {
+                playCue(.accepted)
+            }
             lastEventMessage = "\(event.source): session started."
-            playCue(.accepted)
-            startPulse()
         case .working:
-            if case .running = taskState {} else { taskState = .running(startedAt: Date()) }
-            startPulse()
+            break // ongoing work is silent
         case .done:
-            stopPulse()
-            // Some CLIs fire Stop on every turn; don't replay the completion cue if
-            // we already announced completion and nothing ran since.
-            if case .completed = taskState {} else { playCue(.completed) }
-            taskState = .completed(finishedAt: Date())
+            if previous != .done { playCue(.completed) }
             lastEventMessage = "\(event.source): turn complete."
         case .failed:
-            stopPulse()
-            taskState = .interrupted(finishedAt: Date())
+            if previous != .failed { playCue(.interrupted) }
             lastEventMessage = "\(event.source): turn failed."
-            playCue(.interrupted)
         case .permission:
-            taskState = .permissionNeeded(at: Date())
+            if previous != .permission { playCue(.permissionNeeded) }
             lastEventMessage = "\(event.source): needs your input."
-            playCue(.permissionNeeded)
         case .ended:
-            stopPulse()
-            releaseAutoAwakeIfNeeded()
-            taskState = .completed(finishedAt: Date())
             lastEventMessage = "\(event.source): session ended."
         }
+
+        recomputeAggregateState()
         refreshSessions()
+    }
+
+    /// Stable identity for a hook session: prefer the session id, then cwd, then tty.
+    private func hookSessionKey(_ event: HookEventWatcher.Event) -> String {
+        if let sid = event.sessionId, !sid.isEmpty { return "\(event.source)|sid:\(sid)" }
+        if let cwd = event.cwd, !cwd.isEmpty { return "\(event.source)|cwd:\(cwd)" }
+        if let tty = event.tty, !tty.isEmpty { return "\(event.source)|tty:\(tty)" }
+        return "\(event.source)|single"
+    }
+
+    /// Collapses all tracked hook sessions into the single menu-bar task state.
+    private func recomputeAggregateState() {
+        // Forget sessions we haven't heard from in a while so a missing SessionEnd
+        // can't pin Bugu to "running" forever.
+        let staleCutoff = Date().addingTimeInterval(-30 * 60)
+        hookSessions = hookSessions.filter { $0.value.at > staleCutoff }
+
+        let phases = hookSessions.values
+        if phases.contains(where: { $0.phase == .permission }) {
+            taskState = .permissionNeeded(at: Date())
+            startPulse()
+        } else if phases.contains(where: { $0.phase == .running }) {
+            if case .running = taskState {} else { taskState = .running(startedAt: Date()) }
+            startPulse()
+        } else if let latest = phases.max(by: { $0.at < $1.at }) {
+            stopPulse()
+            taskState = latest.phase == .failed
+                ? .interrupted(finishedAt: latest.at)
+                : .completed(finishedAt: latest.at)
+            releaseAutoAwakeIfNeeded()
+        } else {
+            stopPulse()
+            taskState = .idle
+            releaseAutoAwakeIfNeeded()
+        }
     }
 
     func refreshIntegrationStatus() {

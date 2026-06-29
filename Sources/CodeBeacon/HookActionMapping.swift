@@ -7,6 +7,22 @@ enum HookAction: Equatable {
     case started, working, done, failed, permission, ended
 }
 
+/// The lasting state of a single tracked agent session (vs `HookAction`, which is a
+/// momentary event). Used to track concurrent sessions independently.
+enum SessionPhase: Equatable {
+    case running, permission, done, failed, ended
+
+    init(_ action: HookAction) {
+        switch action {
+        case .started, .working: self = .running
+        case .permission: self = .permission
+        case .done: self = .done
+        case .failed: self = .failed
+        case .ended: self = .ended
+        }
+    }
+}
+
 /// Maps a raw hook event name to a `HookAction`. Pure and side-effect free so it can
 /// be unit-tested independently of the app's state machine.
 enum HookActionMapping {
