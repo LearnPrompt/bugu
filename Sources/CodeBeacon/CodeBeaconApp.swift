@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import IOKit.pwr_mgt
 import SwiftUI
 
@@ -202,7 +203,7 @@ private struct BeaconMenuView: View {
             .keyboardShortcut("q")
         }
         .padding(16)
-        .onAppear { model.refreshSessions() }
+        .onAppear { model.refreshSessions(immediate: true) }
     }
 }
 
@@ -288,6 +289,28 @@ private struct BeaconWindowView: View {
 
             Divider()
 
+            if !model.accessibilityTrusted {
+                HStack(spacing: 10) {
+                    Image(systemName: "hand.raised.circle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.title3)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Enable Accessibility for precise tab jumps")
+                            .font(.callout.weight(.medium))
+                        Text("Jumping to the exact Warp/Ghostty tab uses System Events. Without it, Bugu just activates the app.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Grant…") { model.requestAccessibilityPermission() }
+                }
+                .padding(12)
+                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 24)
+                .padding(.top, 12)
+            }
+
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(HookIntegration.supportedCLIs) { cli in
@@ -314,7 +337,10 @@ private struct BeaconWindowView: View {
             .padding(.vertical, 12)
         }
         .frame(minWidth: 440, idealWidth: 480, minHeight: 460, idealHeight: 620)
-        .onAppear { model.refreshIntegrationStatus() }
+        .onAppear {
+            model.refreshIntegrationStatus()
+            model.refreshAccessibilityStatus()
+        }
     }
 }
 
@@ -399,9 +425,13 @@ final class BeaconModel: ObservableObject {
     private var knownAgentPIDs = Set<Int32>()
     private var announcedAgentPIDs = Set<Int32>()
     private var watchedAgentStartTimes: [Int32: Date] = [:]
+    /// Consecutive scans an announced agent has been missing, for liveness debounce.
+    private var agentMissCounts: [Int32: Int] = [:]
     private var simulatedAgentProcess: Process?
     private let soundEngine = BuguSoundEngine()
     private var hookWatcher: HookEventWatcher?
+    /// Debounce handle for `refreshSessions()`.
+    private var sessionRefreshTask: Task<Void, Never>?
     /// When the last hook event arrived. While recent, the `ps` poller defers to hooks
     /// for state and sounds so the two paths don't double-fire.
     private var lastHookEventAt: Date = .distantPast
@@ -476,11 +506,15 @@ final class BeaconModel: ObservableObject {
             return .started
         case "userpromptsubmit", "beforesubmitprompt", "pretooluse", "posttooluse",
              "before_tool", "after_tool", "afteragentthought", "afterfileedit",
-             "aftershellexecution", "aftermcpexecution":
+             "aftershellexecution", "aftermcpexecution",
+             // A single failed tool call is not a failed *task*: treat it as ongoing
+             // work (no sound) rather than firing the interrupted cue every time a
+             // grep returns non-zero.
+             "posttoolusefailure":
             return .working
         case "stop", "afteragent", "afteragentresponse", "post_agent_turn":
             return .done
-        case "stopfailure", "posttoolusefailure":
+        case "stopfailure":
             return .failed
         case "notification", "permissionrequest":
             return .permission
@@ -494,6 +528,9 @@ final class BeaconModel: ObservableObject {
     /// Drives state + sounds instantly from a CLI hook event (no polling latency).
     private func applyHookEvent(_ event: HookEventWatcher.Event) {
         guard let action = canonicalAction(for: event.hookEvent) else { return }
+        // Only react to CLIs the user has enabled. A stale hook left behind by a
+        // since-disabled CLI must not keep driving Bugu (nil = unknown source → allow).
+        if integrationStatus[event.source] == false { return }
         lastHookEventAt = Date()
         switch action {
         case .started:
@@ -511,9 +548,11 @@ final class BeaconModel: ObservableObject {
             startPulse()
         case .done:
             stopPulse()
+            // Some CLIs fire Stop on every turn; don't replay the completion cue if
+            // we already announced completion and nothing ran since.
+            if case .completed = taskState {} else { playCue(.completed) }
             taskState = .completed(finishedAt: Date())
             lastEventMessage = "\(event.source): turn complete."
-            playCue(.completed)
         case .failed:
             stopPulse()
             taskState = .interrupted(finishedAt: Date())
@@ -566,6 +605,27 @@ final class BeaconModel: ObservableObject {
         refreshIntegrationStatus()
     }
 
+    // MARK: - Accessibility permission (needed for precise tab jumps)
+
+    /// Whether Bugu is trusted for Accessibility, which System Events needs to focus a
+    /// specific Warp/Ghostty tab. Without it, jumps fall back to merely activating the app.
+    @Published var accessibilityTrusted: Bool = AXIsProcessTrusted()
+
+    func refreshAccessibilityStatus() {
+        accessibilityTrusted = AXIsProcessTrusted()
+    }
+
+    /// Triggers the macOS permission prompt and opens the Accessibility settings pane
+    /// so the user can grant Bugu in one step.
+    func requestAccessibilityPermission() {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+        refreshAccessibilityStatus()
+    }
+
     /// SwiftUI binding for a single cue's custom sound selection.
     func customSoundBinding(for key: String) -> Binding<String> {
         Binding(
@@ -602,11 +662,21 @@ final class BeaconModel: ObservableObject {
     }
 
     /// Reloads the recent-session list off the main thread (transcript reads + lsof).
-    func refreshSessions() {
-        let live = activeAgents
-        Task.detached(priority: .utility) {
-            let sessions = RecentSessionStore.load(liveAgents: live)
-            await MainActor.run { self.recentSessions = sessions }
+    /// Debounced: rapid callers (e.g. a burst of hook events) collapse into a single
+    /// reload so we don't hammer the disk and `lsof` on every PostToolUse.
+    func refreshSessions(immediate: Bool = false) {
+        sessionRefreshTask?.cancel()
+        sessionRefreshTask = Task { [weak self] in
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+            guard !Task.isCancelled, let self else { return }
+            let live = self.activeAgents
+            let sessions = await Task.detached(priority: .utility) {
+                RecentSessionStore.load(liveAgents: live)
+            }.value
+            guard !Task.isCancelled else { return }
+            self.recentSessions = sessions
         }
     }
 
@@ -870,7 +940,21 @@ final class BeaconModel: ObservableObject {
 
     private func startAgentWatcher() {
         autoWatchEnabled = true
-        let snapshot = AgentProcessScanner.scan()
+        // Establish the baseline off the main thread, then schedule periodic scans.
+        Task.detached(priority: .utility) {
+            let snapshot = AgentProcessScanner.scan()
+            await MainActor.run { [weak self] in self?.applyBaseline(snapshot) }
+        }
+
+        agentScanTimer?.invalidate()
+        agentScanTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.scanAgents() }
+        }
+    }
+
+    /// Records the initial set of running agents without announcing any of them, so a
+    /// watcher started mid-task doesn't immediately chirp.
+    private func applyBaseline(_ snapshot: [AgentProcess]) {
         activeAgents = snapshot
         knownAgentPIDs = Set(snapshot.map(\.pid))
         announcedAgentPIDs.removeAll()
@@ -881,13 +965,7 @@ final class BeaconModel: ObservableObject {
             watchedAgentStartTimes[agent.pid] = now
         }
         lastEventMessage = "Watching coding agents. Baseline: \(snapshot.count) active."
-
-        agentScanTimer?.invalidate()
-        agentScanTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.scanAgents()
-            }
-        }
+        refreshSessions(immediate: true)
     }
 
     private func stopAgentWatcher() {
@@ -897,15 +975,39 @@ final class BeaconModel: ObservableObject {
         knownAgentPIDs.removeAll()
         announcedAgentPIDs.removeAll()
         watchedAgentStartTimes.removeAll()
+        agentMissCounts.removeAll()
         autoWatchEnabled = false
         lastEventMessage = "Agent watcher stopped."
     }
 
+    /// Kicks off a process scan on a background thread; results are applied on main.
+    /// `ps -axo` over every process is too heavy to run on the UI thread every 2s.
     private func scanAgents() {
-        let snapshot = AgentProcessScanner.scan()
+        Task.detached(priority: .utility) {
+            let snapshot = AgentProcessScanner.scan()
+            await MainActor.run { [weak self] in self?.applyScan(snapshot) }
+        }
+    }
+
+    private func applyScan(_ snapshot: [AgentProcess]) {
         let currentPIDs = Set(snapshot.map(\.pid))
-        let newPIDs = currentPIDs.subtracting(knownAgentPIDs)
-        let endedAnnouncedPIDs = announcedAgentPIDs.subtracting(currentPIDs)
+        // Genuinely new = appeared this scan and not already tracked (a pid that
+        // flickered out for a sample and came back is not "new").
+        let newPIDs = currentPIDs.subtracting(knownAgentPIDs).subtracting(announcedAgentPIDs)
+
+        // Liveness debounce: an announced agent must be missing from two consecutive
+        // scans before we treat it as ended, so a single dropped `ps` sample can't
+        // fire a false completion/interruption cue.
+        var endedAnnouncedPIDs = Set<Int32>()
+        for pid in announcedAgentPIDs {
+            if currentPIDs.contains(pid) {
+                agentMissCounts[pid] = 0
+            } else {
+                let misses = (agentMissCounts[pid] ?? 0) + 1
+                agentMissCounts[pid] = misses
+                if misses >= 2 { endedAnnouncedPIDs.insert(pid) }
+            }
+        }
         let newAgents = snapshot.filter { newPIDs.contains($0.pid) }
 
         activeAgents = snapshot
@@ -939,6 +1041,7 @@ final class BeaconModel: ObservableObject {
             }.count
             for pid in endedAnnouncedPIDs {
                 watchedAgentStartTimes.removeValue(forKey: pid)
+                agentMissCounts.removeValue(forKey: pid)
             }
             announcedAgentPIDs.subtract(endedAnnouncedPIDs)
             if announcedAgentPIDs.isEmpty {

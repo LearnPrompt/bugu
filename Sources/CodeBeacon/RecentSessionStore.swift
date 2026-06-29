@@ -31,7 +31,7 @@ enum RecentSessionStore {
     /// Builds the recent-session list: reads transcripts, marks sessions that match a
     /// live agent process as active, and guarantees every running agent appears.
     /// `liveAgents` is the current `ps`-based scan from the watcher.
-    static func load(liveAgents: [AgentProcess], limit: Int = 8) -> [RecentSession] {
+    static func load(liveAgents: [AgentProcess], limit: Int = 12) -> [RecentSession] {
         var disk: [RecentSession] = []
         disk.append(contentsOf: loadClaude())
         disk.append(contentsOf: loadCodex())
@@ -63,17 +63,20 @@ enum RecentSessionStore {
         }
 
         // Make sure every running agent shows up and is jump-able, even if its
-        // transcript could not be parsed (covers Warp/Kimi/Codex edge cases).
+        // transcript could not be parsed or its cwd could not be resolved (covers
+        // agents we have no transcript reader for, plus Warp/Kimi/Codex edge cases).
         let now = Date()
+        let matchedPIDs = Set(sessions.compactMap(\.pid))
         for agent in liveAgents {
-            guard let cwd = liveByCwd.first(where: { $0.value.pid == agent.pid })?.key else { continue }
-            if matchedCwds.contains(cwd) { continue }
-            matchedCwds.insert(cwd)
+            if matchedPIDs.contains(agent.pid) { continue }
+            let cwd = liveByCwd.first(where: { $0.value.pid == agent.pid })?.key
+            if let cwd, matchedCwds.contains(cwd) { continue }
+            if let cwd { matchedCwds.insert(cwd) }
             sessions.append(RecentSession(
                 id: "live:\(agent.pid)",
                 agent: agent.name,
-                projectPath: cwd,
-                title: "Running…",
+                projectPath: cwd ?? "",
+                title: cwd != nil ? "Running…" : "Running · \(agent.name)",
                 lastActivity: now,
                 pid: agent.pid,
                 command: agent.command

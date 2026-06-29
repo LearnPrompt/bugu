@@ -139,8 +139,16 @@ enum HookIntegration {
       *) PAYLOAD="null" ;;
     esac
     TTYV=$(tty 2>/dev/null || echo "")
+    # Keep the event log bounded — trim to the last 200 lines once it grows past ~512KB.
+    LOG="$DIR/events.jsonl"
+    if [ -f "$LOG" ]; then
+      SIZE=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+      if [ "$SIZE" -gt 524288 ]; then
+        tail -n 200 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG" 2>/dev/null
+      fi
+    fi
     printf '{"ts":%s,"source":"%s","event":"%s","tty":"%s","payload":%s}\\n' \\
-      "$(date +%s)" "$SRC" "$EV" "$TTYV" "$PAYLOAD" >> "$DIR/events.jsonl" 2>/dev/null
+      "$(date +%s)" "$SRC" "$EV" "$TTYV" "$PAYLOAD" >> "$LOG" 2>/dev/null
     # Tag the terminal tab with the project name for Warp/Ghostty jump matching.
     if [ -n "$TTYV" ] && [ "$TTYV" != "not a tty" ]; then
       CWD=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"cwd":"\\([^"]*\\)".*/\\1/p')
