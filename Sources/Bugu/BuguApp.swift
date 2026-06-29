@@ -67,6 +67,31 @@ private struct BeaconMenuView: View {
                 Spacer()
             }
 
+            if let update = model.availableUpdate {
+                Button {
+                    model.openUpdatePage()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .foregroundStyle(.white)
+                        Text("Update available: v\(update.version)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white)
+                        Spacer(minLength: 4)
+                        Text("Download ›")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open the latest release page to download v\(update.version)")
+            }
+
             Divider()
 
             Toggle("Keep Mac awake", isOn: $model.keepAwakeEnabled)
@@ -218,6 +243,10 @@ private struct BeaconMenuView: View {
             Button("Manage agents…") {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
+            }
+
+            Button("Check for updates") {
+                model.checkForUpdates(announce: true)
             }
 
             Button("Quit Bugu") {
@@ -523,6 +552,45 @@ final class BeaconModel: ObservableObject {
         // much of a beacon. The user can still turn it off and that choice sticks.
         autoWatchEnabled = Self.loadAutoWatch()
         if autoWatchEnabled { startAgentWatcher() }
+
+        // Quietly check GitHub for a newer release on launch.
+        checkForUpdates()
+    }
+
+    // MARK: - Update check (notify only; never auto-installs)
+
+    /// The newest release found on GitHub when it is newer than this build, else nil.
+    @Published var availableUpdate: UpdateChecker.Release?
+
+    /// The running build's version string from Info.plist.
+    var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    /// Asks GitHub for the latest release and flags it if newer. `announce` surfaces a
+    /// result message even when up to date (used by the manual "Check for updates").
+    func checkForUpdates(announce: Bool = false) {
+        Task { [weak self] in
+            let latest = await UpdateChecker.fetchLatest()
+            guard let self else { return }
+            guard let latest else {
+                if announce { self.lastEventMessage = "Update check failed (offline?)." }
+                return
+            }
+            if UpdateChecker.isNewer(latest.version, than: self.currentVersion) {
+                self.availableUpdate = latest
+                self.lastEventMessage = "Update available: v\(latest.version)."
+            } else {
+                self.availableUpdate = nil
+                if announce { self.lastEventMessage = "Bugu is up to date (v\(self.currentVersion))." }
+            }
+        }
+    }
+
+    /// Opens the release page for the available update in the browser.
+    func openUpdatePage() {
+        let link = availableUpdate?.url ?? UpdateChecker.releasesPageURL
+        if let url = URL(string: link) { NSWorkspace.shared.open(url) }
     }
 
     private func startHookWatcher() {
