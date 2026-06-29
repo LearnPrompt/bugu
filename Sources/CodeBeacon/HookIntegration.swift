@@ -209,6 +209,19 @@ enum HookIntegration {
         return obj
     }
 
+    /// Loads a JSON object, distinguishing "file absent" (safe to start fresh) from
+    /// "file present but unparseable" (e.g. JSONC with comments). In the latter case
+    /// `safe` is false so callers abort rather than overwrite the user's whole config
+    /// with just our hooks.
+    private static func loadJSONForEdit(_ path: String) -> (object: [String: Any], safe: Bool) {
+        guard FileManager.default.fileExists(atPath: path) else { return ([:], true) }
+        guard let data = FileManager.default.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ([:], false)
+        }
+        return (obj, true)
+    }
+
     private static func writeJSON(_ object: [String: Any], to path: String) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
             return false
@@ -225,15 +238,17 @@ enum HookIntegration {
     // MARK: - Nested JSON hooks (Claude / Codex / Trae / Gemini / Qwen / …)
 
     private static func installJSONHooks(_ cli: CLI, standalone: Bool) -> Bool {
+        let (loaded, safe) = loadJSONForEdit(cli.configPath)
+        guard safe else { return false }   // never clobber an unparseable config
         backup(cli.configPath)
-        var root = loadJSON(cli.configPath)
+        var root = loaded
         var hooks = root["hooks"] as? [String: Any] ?? [:]
         for event in cli.events {
             var groups = (hooks[event] as? [[String: Any]] ?? []).filter { group in
                 let inner = group["hooks"] as? [[String: Any]] ?? []
                 return !inner.contains { isBugu($0["command"]) }
             }
-            groups.append(["hooks": [["type": "command", "command": command(for: cli, event: event), "timeout": 30]]])
+            groups.append(["hooks": [["type": "command", "command": command(for: cli, event: event), "timeout": 5]]])
             hooks[event] = groups
         }
         root["hooks"] = hooks
@@ -241,7 +256,9 @@ enum HookIntegration {
     }
 
     private static func uninstallJSONHooks(_ cli: CLI) -> Bool {
-        var root = loadJSON(cli.configPath)
+        let (loaded, safe) = loadJSONForEdit(cli.configPath)
+        guard safe else { return false }   // leave an unparseable config untouched
+        var root = loaded
         guard var hooks = root["hooks"] as? [String: Any] else { return true }
         for (event, value) in hooks {
             guard var groups = value as? [[String: Any]] else { continue }
@@ -260,8 +277,10 @@ enum HookIntegration {
     // MARK: - Cursor flat JSON
 
     private static func installCursorFlat(_ cli: CLI) -> Bool {
+        let (loaded, safe) = loadJSONForEdit(cli.configPath)
+        guard safe else { return false }
         backup(cli.configPath)
-        var root = loadJSON(cli.configPath)
+        var root = loaded
         var hooks = root["hooks"] as? [String: Any] ?? [:]
         for event in cli.events {
             var entries = (hooks[event] as? [[String: Any]] ?? []).filter { !isBugu($0["command"]) }
@@ -310,7 +329,7 @@ enum HookIntegration {
             } else {
                 block += "event = \"\(event)\"\n"
             }
-            block += "command = \"\(command(for: cli, event: event))\"\ntimeout = 30\n\n"
+            block += "command = \"\(command(for: cli, event: event))\"\ntimeout = 5\n\n"
         }
         block += "\(blockEnd)\n"
         text += block

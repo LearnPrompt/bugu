@@ -20,6 +20,11 @@ let package = Package(
             resources: [
                 .copy("../../Resources/Sounds/bugu-pack")
             ]
+        ),
+        .testTarget(
+            name: "CodeBeaconTests",
+            dependencies: ["CodeBeacon"],
+            path: "Tests/CodeBeaconTests"
         )
     ]
 )

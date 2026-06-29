@@ -495,39 +495,9 @@ final class BeaconModel: ObservableObject {
         hookWatcher = watcher
     }
 
-    /// Canonical action a hook event maps to, normalised across every CLI's own
-    /// event-name vocabulary (Claude's SessionStart/Stop, Cursor's
-    /// afterAgentResponse/stop, Mistral's post_agent_turn, Kiro's agentSpawn, …).
-    private enum HookAction { case started, working, done, failed, permission, ended }
-
-    private func canonicalAction(for eventName: String) -> HookAction? {
-        switch eventName.lowercased() {
-        case "sessionstart", "agentspawn":
-            return .started
-        case "userpromptsubmit", "beforesubmitprompt", "pretooluse", "posttooluse",
-             "before_tool", "after_tool", "afteragentthought", "afterfileedit",
-             "aftershellexecution", "aftermcpexecution",
-             // A single failed tool call is not a failed *task*: treat it as ongoing
-             // work (no sound) rather than firing the interrupted cue every time a
-             // grep returns non-zero.
-             "posttoolusefailure":
-            return .working
-        case "stop", "afteragent", "afteragentresponse", "post_agent_turn":
-            return .done
-        case "stopfailure":
-            return .failed
-        case "notification", "permissionrequest":
-            return .permission
-        case "sessionend":
-            return .ended
-        default:
-            return nil
-        }
-    }
-
     /// Drives state + sounds instantly from a CLI hook event (no polling latency).
     private func applyHookEvent(_ event: HookEventWatcher.Event) {
-        guard let action = canonicalAction(for: event.hookEvent) else { return }
+        guard let action = HookActionMapping.action(for: event.hookEvent) else { return }
         // Only react to CLIs the user has enabled. A stale hook left behind by a
         // since-disabled CLI must not keep driving Bugu (nil = unknown source → allow).
         if integrationStatus[event.source] == false { return }
@@ -1204,8 +1174,8 @@ struct AgentProcess: Identifiable, Hashable, Sendable {
     var id: Int32 { pid }
 }
 
-private enum AgentProcessScanner {
-    private struct Signature {
+enum AgentProcessScanner {
+    struct Signature {
         let name: String
         let patterns: [String]
     }
@@ -1294,7 +1264,7 @@ private enum AgentProcessScanner {
         return representatives.values.sorted { $0.pid < $1.pid }
     }
 
-    private static func parseLine(_ line: Substring) -> (pid: Int32, tty: String?, command: String)? {
+    static func parseLine(_ line: Substring) -> (pid: Int32, tty: String?, command: String)? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         // Columns: PID TTY COMMAND (COMMAND may itself contain spaces).
         let parts = trimmed.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
@@ -1312,7 +1282,7 @@ private enum AgentProcessScanner {
         return (pid, tty, command)
     }
 
-    private static func shouldIgnore(command: String) -> Bool {
+    static func shouldIgnore(command: String) -> Bool {
         let lower = command.lowercased()
         let ignoredFragments = [
             "codebeacon",
@@ -1343,12 +1313,17 @@ private enum AgentProcessScanner {
             "claude-mem",
             "claudemem",
             "rg -i",
-            "ps -axo"
+            "ps -axo",
+            // Name collisions with bare-word agent signatures: the Goose DB migration
+            // tool's subcommands (vs Block's Goose agent) look nothing like an agent
+            // session, so filter them out explicitly.
+            "goose up", "goose down", "goose create", "goose status", "goose -dir",
+            "goose redo", "goose validate", "goose migrate"
         ]
         return ignoredFragments.contains { lower.contains($0) }
     }
 
-    private static func matchedAgentName(command: String) -> String? {
+    static func matchedAgentName(command: String) -> String? {
         let lower = command.lowercased()
         for signature in signatures {
             if signature.patterns.contains(where: { pattern in

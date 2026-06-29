@@ -260,7 +260,7 @@ enum RecentSessionStore {
     }
 
     /// Returns the first capture group of `pattern` in `text`, or nil.
-    private static func firstCapture(in text: String, pattern: String) -> String? {
+    static func firstCapture(in text: String, pattern: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, range: range),
@@ -330,7 +330,7 @@ enum RecentSessionStore {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func clip(_ text: String, max: Int = 64) -> String {
+    static func clip(_ text: String, max: Int = 64) -> String {
         let collapsed = text
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
