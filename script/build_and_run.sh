@@ -6,7 +6,7 @@ APP_NAME="Bugu"
 PRODUCT_NAME="Bugu"
 BUNDLE_ID="com.learnprompt.Bugu"
 MIN_SYSTEM_VERSION="14.0"
-VERSION="${BUGU_VERSION:-0.2.0-dev}"
+VERSION="${BUGU_VERSION:-0.2.1-dev}"
 COPYRIGHT="Copyright © $(date +%Y) LearnPrompt. All rights reserved."
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -113,6 +113,12 @@ cd bugu
 ./script/build_and_run.sh
 ```
 
+Run the unit tests (XCTest ships with Xcode, not the bare command-line tools):
+
+```bash
+./script/test.sh
+```
+
 > Requires **macOS 14+** and the Xcode command-line tools (Swift 5.10+).
 
 ### Turn on the basics
@@ -170,6 +176,9 @@ the UI — source CLI, event name, working directory, session id, and TTY — to
 
 Bugu is an early, fast-moving project from [LearnPrompt](https://github.com/LearnPrompt).
 The `v0.2` line adds the session list, click-to-jump, hook integration, and the
-Bugu Pack on top of the original keep-awake + status-sound MVP. Community builds are
-currently **unsigned** (see the Gatekeeper note above); signed + notarized builds
+Bugu Pack on top of the original keep-awake + status-sound MVP. `v0.2.1` is a
+robustness pass: independent multi-agent session tracking, off-main-thread process
+scanning, debounced refreshes, liveness debouncing to kill false completion cues,
+safer (never-clobbering) hook-config writes, and a unit-test suite. Community builds
+are currently **unsigned** (see the Gatekeeper note above); signed + notarized builds
 will follow.

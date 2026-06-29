@@ -98,6 +98,12 @@ cd bugu
 ./script/build_and_run.sh
 ```
 
+运行单元测试(XCTest 随 Xcode 提供,纯命令行工具没有):
+
+```bash
+./script/test.sh
+```
+
 > 需要 **macOS 14+** 和 Xcode 命令行工具(Swift 5.10+)。
 
 ### 跑起来
@@ -153,4 +159,6 @@ Coding agent(Claude Code / Codex / Kimi / ...)
 
 Bugu 是 [LearnPrompt](https://github.com/LearnPrompt) 旗下一个早期、快速迭代的项目。
 `v0.2` 在最初的「防休眠 + 状态音」MVP 之上,新增了会话列表、一键跳转、hook 集成和 Bugu Pack。
+`v0.2.1` 是一次健壮性强化:多 agent 会话独立追踪、进程扫描移出主线程、刷新去抖、
+存活去抖(消除假完成音)、更安全(绝不覆盖)的 hook 配置写入,以及单元测试。
 社区版目前**未签名**(见上方 Gatekeeper 说明),签名 + 公证版本后续跟进。
