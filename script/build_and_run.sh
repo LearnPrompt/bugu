@@ -6,6 +6,8 @@ APP_NAME="Bugu"
 PRODUCT_NAME="CodeBeacon"
 BUNDLE_ID="com.learnprompt.Bugu"
 MIN_SYSTEM_VERSION="14.0"
+VERSION="${BUGU_VERSION:-0.1.0-dev}"
+COPYRIGHT="Copyright © $(date +%Y) LearnPrompt. All rights reserved."
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -31,6 +33,15 @@ cp "$BUILD_BINARY" "$APP_BINARY"
 cp "$ICON_FILE" "$APP_RESOURCES/AppIcon.icns"
 chmod +x "$APP_BINARY"
 
+# Copy the Bugu sound pack into the main bundle so BuguSoundEngine can load it
+# via Bundle.main.url(forResource:withExtension:subdirectory:).
+# Note: SwiftPM executable targets do not generate a usable resource bundle,
+# so we copy the files manually even though Package.swift declares them.
+if [[ -d "$ROOT_DIR/Resources/Sounds/bugu-pack" ]]; then
+  mkdir -p "$APP_RESOURCES/Sounds"
+  cp -R "$ROOT_DIR/Resources/Sounds/bugu-pack" "$APP_RESOURCES/Sounds/"
+fi
+
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -50,17 +61,39 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
   <key>LSUIElement</key>
   <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>$COPYRIGHT</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
 </dict>
 </plist>
 PLIST
 
+# macOS aggressively caches app icons by bundle id, so a freshly built bundle
+# keeps showing the previous icon even after AppIcon.icns changes. Touch the
+# bundle, re-register it with LaunchServices, and nudge the icon services so the
+# new logo is actually picked up.
+refresh_icon_cache() {
+  touch "$APP_BUNDLE"
+  local lsregister="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+  if [[ -x "$lsregister" ]]; then
+    "$lsregister" -f "$APP_BUNDLE" >/dev/null 2>&1 || true
+  fi
+  # iconservicesagent holds the rendered icon cache; restarting it clears stale art.
+  killall iconservicesagent >/dev/null 2>&1 || true
+  killall Dock >/dev/null 2>&1 || true
+}
+
 open_app() {
+  refresh_icon_cache
   /usr/bin/open -n "$APP_BUNDLE"
 }
 

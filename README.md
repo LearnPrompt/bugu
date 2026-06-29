@@ -19,22 +19,28 @@ MVP behavior:
 - Does not use voice/TTS by default, so headphone disconnects do not turn status
   updates into loud spoken alerts.
 
-The sound direction uses macOS built-in alert sounds: short, clear,
-event-specific cues that do not steal focus. Bugu does not bundle third-party
-audio, copy Vibe Island or Claude audio, or use voice/TTS.
+The default sound direction uses macOS built-in alert sounds: short, clear,
+event-specific cues that do not steal focus. Bugu also ships the optional
+"Bugu Pack" — five original, hand-picked sounds provided by the project — for
+users who want a warmer, more recognizable set of state cues. Bugu does not
+copy Vibe Island or Claude audio, or use voice/TTS.
 
 ## Status Sounds
 
-| State | Meaning | Sound |
-| --- | --- | --- |
-| Accepted | A new coding agent task was detected | Funk |
-| Running | The watched task is still active | Hero |
-| Completed | The watched task ended normally | Blow |
-| Interrupted | The watched task stopped unexpectedly | Basso |
-| Permission needed | The task needs user approval | Ping |
+Two sound packs are included. The default uses macOS built-in alert sounds; the
+"Bugu Pack" uses original MP3 cues provided by the project. You can switch
+between them from the menu bar window.
 
-All five cues are played once via `NSSound` using macOS built-in sound names.
-Bugu does not copy system sound files into the app bundle.
+| State | Meaning | System Sound | Bugu Pack |
+| --- | --- | --- | --- |
+| Accepted | A new coding agent task was detected | Funk | start |
+| Running | The watched task is still active | Hero | continue |
+| Completed | The watched task ended normally | Blow | success |
+| Interrupted | The watched task stopped unexpectedly | Basso | end |
+| Permission needed | The task needs user approval | Ping | need |
+
+All five cues are played once via `NSSound`. The System pack uses built-in
+sound names; the Bugu Pack loads `*.mp3` files bundled in the app.
 
 The `Alert volume` slider applies to all five states. It defaults to 65%, can be
 set from 20% to 100%, and is saved between launches.
@@ -67,6 +73,41 @@ Scan currently visible coding agents:
 ```bash
 $(swift build --show-bin-path)/CodeBeacon --scan-agents
 ```
+
+## Download a Community Build
+
+Bugu can be distributed as an unsigned community build before we add an Apple
+Developer ID certificate and notarization credentials. This keeps release costs
+at 0 USD, but macOS Gatekeeper will warn that the developer cannot be verified.
+
+Build the unsigned DMG:
+
+```bash
+./script/release.sh --skip-notarization 0.1.1-community
+```
+
+The DMG is written to:
+
+```bash
+dist/Bugu-0.1.1-community.dmg
+```
+
+To open the app after downloading:
+
+1. Mount the DMG and drag `Bugu.app` to `Applications`.
+2. Control-click or right-click `Bugu.app`, then choose `Open`.
+3. Confirm `Open` in the macOS security dialog.
+
+If macOS still blocks the app, open `System Settings` -> `Privacy & Security`
+and choose `Open Anyway` for Bugu. Advanced users can also remove the download
+quarantine flag after verifying the source:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Bugu.app
+```
+
+Release-ready DMGs for broader distribution should be signed with a real
+`Developer ID Application` certificate and notarized with `notarytool`.
 
 ## Current Prototype Flow
 

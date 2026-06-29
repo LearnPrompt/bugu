@@ -15,6 +15,15 @@ struct CodeBeaconApp: App {
             }
             exit(0)
         }
+
+        if CommandLine.arguments.contains("--list-sessions") {
+            let sessions = RecentSessionStore.load(liveAgents: AgentProcessScanner.scan())
+            for session in sessions {
+                let live = session.isActive ? "LIVE pid \(session.pid ?? 0)" : "history"
+                print("[\(live)]\t\(session.agent)\t\(session.projectName)\t\(session.title)")
+            }
+            exit(0)
+        }
     }
 
     var body: some Scene {
@@ -24,10 +33,10 @@ struct CodeBeaconApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Bugu", id: "main") {
+        Window("Bugu · Agents", id: "main") {
             BeaconWindowView(model: model)
-                .frame(width: 560, height: 440)
         }
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -39,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private struct BeaconMenuView: View {
     @ObservedObject var model: BeaconModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -93,6 +103,18 @@ private struct BeaconMenuView: View {
             }
             Slider(value: $model.alertVolume, in: 0.2...1.0, step: 0.05)
 
+            HStack {
+                Text("Sound pack")
+                Spacer()
+                Picker("", selection: $model.soundProfile) {
+                    ForEach(BuguSoundProfile.allCases) { profile in
+                        Text(profile.displayName).tag(profile)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 120)
+            }
+
             Divider()
 
             HStack {
@@ -129,19 +151,23 @@ private struct BeaconMenuView: View {
                     .lineLimit(2)
             }
 
-            if !model.activeAgents.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Active agents")
-                        .font(.caption.bold())
-                    ForEach(model.activeAgents.prefix(4)) { agent in
-                        Text("\(agent.name) · pid \(agent.pid)")
+            if !model.recentSessions.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Recent sessions")
+                            .font(.caption.bold())
+                        Spacer()
+                        Text("green = live · click to jump")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                    }
+                    ForEach(model.recentSessions) { session in
+                        SessionRow(session: session, relativeTime: model.relativeTime(session.lastActivity))
                     }
                 }
             }
 
+            #if DEBUG
             Divider()
 
             DisclosureGroup("Debug") {
@@ -160,8 +186,14 @@ private struct BeaconMenuView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            #endif
 
             Divider()
+
+            Button("Manage agents…") {
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
 
             Button("Quit Bugu") {
                 model.shutdown()
@@ -170,109 +202,144 @@ private struct BeaconMenuView: View {
             .keyboardShortcut("q")
         }
         .padding(16)
+        .onAppear { model.refreshSessions() }
     }
 }
 
+/// A single recent-session row: live status dot, project + title, agent and time.
+/// Tapping a live session jumps to its terminal; historical rows are not jump-able.
+private struct SessionRow: View {
+    let session: RecentSession
+    let relativeTime: String
+
+    var body: some View {
+        Button {
+            guard let pid = session.pid else { return }
+            AgentSessionLauncher.launchSession(
+                pid: pid,
+                agentName: session.agent,
+                command: session.command,
+                projectPath: session.projectPath
+            )
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(session.isActive ? Color.green : Color.secondary.opacity(0.4))
+                    .frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(session.projectName)
+                        .font(.caption)
+                        .lineLimit(1)
+                    Text(session.title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(session.agent)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(relativeTime)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!session.isActive)
+        .help(session.isActive ? "Jump to \(session.agent) in \(session.projectName)" : "Historical session")
+    }
+}
+
+/// The Agents window has a single, focused job: pick which coding agents Bugu hooks
+/// into. Everything that mirrors live state (awake, volume, sound pack, sessions) lives
+/// in the menu-bar popover and is deliberately *not* duplicated here.
 private struct BeaconWindowView: View {
     @ObservedObject var model: BeaconModel
 
+    private var detectedCount: Int {
+        HookIntegration.supportedCLIs.filter(\.isAvailable).count
+    }
+    private var enabledCount: Int {
+        HookIntegration.supportedCLIs.filter { model.integrationStatus[$0.id] == true }.count
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 14) {
-                Image(systemName: model.menuIconName)
-                    .font(.system(size: 42))
-                    .foregroundStyle(model.statusColor)
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Bugu / 布谷")
+                    Text("Agents")
                         .font(.largeTitle.bold())
-                    Text("A sound beacon for long-running Mac coding tasks.")
+                    Text("Pick which coding agents Bugu hooks into for instant, accurate start / done / permission events. Enabling an agent edits its CLI config — backed up first and fully reversible.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("\(enabledCount) enabled · \(detectedCount) detected · \(HookIntegration.supportedCLIs.count) supported")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
+            .padding(24)
 
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 12) {
-                GridRow {
-                    Text("Awake assertion")
-                    Text(model.keepAwakeEnabled ? "Active" : "Off")
-                        .foregroundStyle(model.keepAwakeEnabled ? .green : .secondary)
-                }
-                GridRow {
-                    Text("Agent watcher")
-                    Text(model.autoWatchEnabled ? "Watching" : "Off")
-                        .foregroundStyle(model.autoWatchEnabled ? .blue : .secondary)
-                }
-                GridRow {
-                    Text("Active agents")
-                    Text(model.activeAgentSummary)
-                        .foregroundStyle(model.activeAgents.isEmpty ? .secondary : .primary)
-                }
-                GridRow {
-                    Text("Task state")
-                    Text(model.statusTitle)
-                        .foregroundStyle(model.statusColor)
-                }
-                GridRow {
-                    Text("Heartbeat interval")
-                    Text(model.heartbeatLabel)
-                }
-                GridRow {
-                    Text("Alert volume")
-                    Text(model.alertVolumePercent)
-                }
-                GridRow {
-                    Text("Sound profile")
-                    Text("Five short system cues")
-                }
-                GridRow {
-                    Text("Last event")
-                    Text(model.lastEventMessage ?? "No event yet")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.body)
+            Divider()
 
-            HStack {
-                Toggle("Keep Mac awake", isOn: $model.keepAwakeEnabled)
-                    .onChange(of: model.keepAwakeEnabled) { _, enabled in
-                        model.setKeepAwake(enabled)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(HookIntegration.supportedCLIs) { cli in
+                        AgentToggleRow(cli: cli, model: model)
+                        if cli.id != HookIntegration.supportedCLIs.last?.id {
+                            Divider()
+                        }
                     }
-                Toggle("Watch agents", isOn: $model.autoWatchEnabled)
-                    .onChange(of: model.autoWatchEnabled) { _, enabled in
-                        model.setAutoWatch(enabled)
-                    }
-            }
-
-            HStack {
-                Text("Alert volume")
-                Slider(value: $model.alertVolume, in: 0.2...1.0, step: 0.05)
-                Text(model.alertVolumePercent)
-                    .frame(width: 44, alignment: .trailing)
-                    .monospacedDigit()
-            }
-
-            HStack {
-                Button("Accept") { model.playAccepted() }
-                Button("Running") { model.playRunning() }
-                Button("Done") { model.markCompleted() }
-                Button("Interrupted") { model.markInterrupted() }
-                Button("Permission") { model.playPermissionNeeded() }
-            }
-
-            DisclosureGroup("Debug") {
-                HStack {
-                    Button("Sim agent") { model.startSimulatedAgent() }
-                    Button("Sim interrupt") { model.startSimulatedInterruptedAgent() }
-                    Button("Reset watcher") { model.stopWatching() }
                 }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
             }
 
-            Text("MVP scope: this uses macOS IOKit power assertions and short sound feedback. Closed-lid force-awake support should stay behind an explicit experimental toggle because it can affect heat and battery safety.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            Divider()
 
-            Spacer()
+            HStack {
+                Button("Enable all detected") { model.enableAllDetectedIntegrations() }
+                    .disabled(detectedCount == 0 || enabledCount == detectedCount)
+                Spacer()
+                Button("Disable all") { model.disableAllIntegrations() }
+                    .disabled(enabledCount == 0)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
         }
-        .padding(24)
+        .frame(minWidth: 440, idealWidth: 480, minHeight: 460, idealHeight: 620)
+        .onAppear { model.refreshIntegrationStatus() }
+    }
+}
+
+/// One agent row: name, whether its CLI is installed on this Mac, and the on/off
+/// switch that installs or removes Bugu's hook.
+private struct AgentToggleRow: View {
+    let cli: HookIntegration.CLI
+    @ObservedObject var model: BeaconModel
+
+    var body: some View {
+        Toggle(isOn: Binding(
+            get: { model.integrationStatus[cli.id] ?? false },
+            set: { model.setIntegration(cli, enabled: $0) }
+        )) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(cli.name)
+                    .font(.body)
+                Text(cli.isAvailable ? "Detected on this Mac" : "Not installed")
+                    .font(.caption)
+                    .foregroundStyle(cli.isAvailable ? .green : .secondary)
+            }
+        }
+        .toggleStyle(.switch)
+        .disabled(!cli.isAvailable)
+        .padding(.vertical, 8)
     }
 }
 
@@ -300,21 +367,247 @@ final class BeaconModel: ObservableObject {
             }
         }
     }
+    @Published var soundProfile: BuguSoundProfile = .system {
+        didSet {
+            soundEngine.setProfile(soundProfile)
+            UserDefaults.standard.set(soundProfile.rawValue, forKey: Self.soundProfileKey)
+        }
+    }
+    /// Per-cue macOS system sound names for the Custom profile, keyed by cue key.
+    /// Persisted to UserDefaults and pushed into the sound engine on change.
+    @Published var customSoundNames: [String: String] = [:] {
+        didSet {
+            UserDefaults.standard.set(customSoundNames, forKey: Self.customSoundsKey)
+            applyCustomSounds()
+        }
+    }
     @Published private(set) var taskState: TaskState = .idle
     @Published private(set) var lastEventMessage: String?
     @Published private(set) var activeAgents: [AgentProcess] = []
+    /// Recent coding sessions read from on-disk transcripts, with live ones flagged.
+    @Published private(set) var recentSessions: [RecentSession] = []
+    /// Drives the menu bar icon's gentle pulse while a task is running.
+    @Published private(set) var pulseOn = false
 
     private var powerAssertionIDs: [IOPMAssertionID] = []
+    /// True when the agent watcher (not the user) turned keep-awake on, so it can
+    /// be released automatically once all watched agents finish.
+    private var autoAwakeEngaged = false
     private var heartbeatTimer: Timer?
     private var agentScanTimer: Timer?
+    private var pulseTimer: Timer?
     private var knownAgentPIDs = Set<Int32>()
     private var announcedAgentPIDs = Set<Int32>()
     private var watchedAgentStartTimes: [Int32: Date] = [:]
     private var simulatedAgentProcess: Process?
     private let soundEngine = BuguSoundEngine()
+    private var hookWatcher: HookEventWatcher?
+    /// When the last hook event arrived. While recent, the `ps` poller defers to hooks
+    /// for state and sounds so the two paths don't double-fire.
+    private var lastHookEventAt: Date = .distantPast
+    private var hooksRecentlyActive: Bool { Date().timeIntervalSince(lastHookEventAt) < 15 }
+    /// Per-CLI hook install status, surfaced in the Integrations UI.
+    @Published var integrationStatus: [String: Bool] = [:]
+
+    /// One selectable status cue, used to build the Custom sound pickers.
+    struct CueOption: Identifiable {
+        let cue: BuguSoundEngine.Cue
+        let key: String
+        let label: String
+        var id: String { key }
+    }
+
+    static let cueOptions: [CueOption] = [
+        CueOption(cue: .accepted, key: "accepted", label: "Accept"),
+        CueOption(cue: .running, key: "running", label: "Running"),
+        CueOption(cue: .completed, key: "completed", label: "Done"),
+        CueOption(cue: .interrupted, key: "interrupted", label: "Interrupted"),
+        CueOption(cue: .permissionNeeded, key: "permission", label: "Permission")
+    ]
+
+    static let defaultCustomNames: [String: String] = [
+        "accepted": "Funk",
+        "running": "Hero",
+        "completed": "Blow",
+        "interrupted": "Basso",
+        "permission": "Ping"
+    ]
+
+    /// Available macOS alert sounds, discovered from the system Sounds directory.
+    static let systemSoundNames: [String] = {
+        let dir = "/System/Library/Sounds"
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        let names = files
+            .filter { $0.hasSuffix(".aiff") }
+            .map { String($0.dropLast(5)) }
+        return names.sorted()
+    }()
 
     init() {
         alertVolume = Self.loadAlertVolume()
+        soundProfile = Self.loadSoundProfile()
+        customSoundNames = Self.loadCustomSoundNames()
+        soundEngine.setProfile(soundProfile)
+        applyCustomSounds()
+
+        // Hook integration: deploy the bridge, start watching for events, and read
+        // which CLIs currently have Bugu hooks installed.
+        HookIntegration.deployBridge()
+        refreshIntegrationStatus()
+        startHookWatcher()
+    }
+
+    private func startHookWatcher() {
+        let watcher = HookEventWatcher(path: HookIntegration.eventsPath) { [weak self] event in
+            Task { @MainActor in self?.applyHookEvent(event) }
+        }
+        watcher.start()
+        hookWatcher = watcher
+    }
+
+    /// Canonical action a hook event maps to, normalised across every CLI's own
+    /// event-name vocabulary (Claude's SessionStart/Stop, Cursor's
+    /// afterAgentResponse/stop, Mistral's post_agent_turn, Kiro's agentSpawn, …).
+    private enum HookAction { case started, working, done, failed, permission, ended }
+
+    private func canonicalAction(for eventName: String) -> HookAction? {
+        switch eventName.lowercased() {
+        case "sessionstart", "agentspawn":
+            return .started
+        case "userpromptsubmit", "beforesubmitprompt", "pretooluse", "posttooluse",
+             "before_tool", "after_tool", "afteragentthought", "afterfileedit",
+             "aftershellexecution", "aftermcpexecution":
+            return .working
+        case "stop", "afteragent", "afteragentresponse", "post_agent_turn":
+            return .done
+        case "stopfailure", "posttoolusefailure":
+            return .failed
+        case "notification", "permissionrequest":
+            return .permission
+        case "sessionend":
+            return .ended
+        default:
+            return nil
+        }
+    }
+
+    /// Drives state + sounds instantly from a CLI hook event (no polling latency).
+    private func applyHookEvent(_ event: HookEventWatcher.Event) {
+        guard let action = canonicalAction(for: event.hookEvent) else { return }
+        lastHookEventAt = Date()
+        switch action {
+        case .started:
+            if !keepAwakeEnabled {
+                keepAwakeEnabled = true
+                autoAwakeEngaged = true
+                startPowerAssertions()
+            }
+            taskState = .running(startedAt: Date())
+            lastEventMessage = "\(event.source): session started."
+            playCue(.accepted)
+            startPulse()
+        case .working:
+            if case .running = taskState {} else { taskState = .running(startedAt: Date()) }
+            startPulse()
+        case .done:
+            stopPulse()
+            taskState = .completed(finishedAt: Date())
+            lastEventMessage = "\(event.source): turn complete."
+            playCue(.completed)
+        case .failed:
+            stopPulse()
+            taskState = .interrupted(finishedAt: Date())
+            lastEventMessage = "\(event.source): turn failed."
+            playCue(.interrupted)
+        case .permission:
+            taskState = .permissionNeeded(at: Date())
+            lastEventMessage = "\(event.source): needs your input."
+            playCue(.permissionNeeded)
+        case .ended:
+            stopPulse()
+            releaseAutoAwakeIfNeeded()
+            taskState = .completed(finishedAt: Date())
+            lastEventMessage = "\(event.source): session ended."
+        }
+        refreshSessions()
+    }
+
+    func refreshIntegrationStatus() {
+        var status: [String: Bool] = [:]
+        for cli in HookIntegration.supportedCLIs {
+            status[cli.id] = HookIntegration.isInstalled(cli)
+        }
+        integrationStatus = status
+    }
+
+    /// Installs or removes Bugu hooks for a CLI (writes its config; backed up first).
+    func setIntegration(_ cli: HookIntegration.CLI, enabled: Bool) {
+        if enabled {
+            HookIntegration.install(cli)
+        } else {
+            HookIntegration.uninstall(cli)
+        }
+        refreshIntegrationStatus()
+    }
+
+    /// Installs hooks for every CLI actually present on this Mac, in one click.
+    func enableAllDetectedIntegrations() {
+        for cli in HookIntegration.supportedCLIs where cli.isAvailable {
+            HookIntegration.install(cli)
+        }
+        refreshIntegrationStatus()
+    }
+
+    /// Removes Bugu hooks from every CLI we previously installed into.
+    func disableAllIntegrations() {
+        for cli in HookIntegration.supportedCLIs where integrationStatus[cli.id] == true {
+            HookIntegration.uninstall(cli)
+        }
+        refreshIntegrationStatus()
+    }
+
+    /// SwiftUI binding for a single cue's custom sound selection.
+    func customSoundBinding(for key: String) -> Binding<String> {
+        Binding(
+            get: { self.customSoundNames[key] ?? Self.defaultCustomNames[key] ?? "Funk" },
+            set: { self.customSoundNames[key] = $0 }
+        )
+    }
+
+    private func applyCustomSounds() {
+        for option in Self.cueOptions {
+            let name = customSoundNames[option.key] ?? Self.defaultCustomNames[option.key] ?? "Funk"
+            soundEngine.setCustomSoundName(name, for: option.cue)
+        }
+    }
+
+    /// Elapsed-time label for a watched agent, e.g. "3m 12s", or nil if unknown.
+    func runtimeLabel(for pid: Int32) -> String? {
+        guard let startedAt = watchedAgentStartTimes[pid] else { return nil }
+        return Self.durationFormatter.string(from: Date().timeIntervalSince(startedAt))
+    }
+
+    /// Display label for one active-agent row, including runtime when available.
+    func agentRowLabel(for agent: AgentProcess) -> String {
+        var label = "\(agent.name) · pid \(agent.pid)"
+        if let runtime = runtimeLabel(for: agent.pid) {
+            label += " · \(runtime)"
+        }
+        return label
+    }
+
+    /// Short "time ago" label for a session's last activity.
+    func relativeTime(_ date: Date) -> String {
+        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    /// Reloads the recent-session list off the main thread (transcript reads + lsof).
+    func refreshSessions() {
+        let live = activeAgents
+        Task.detached(priority: .utility) {
+            let sessions = RecentSessionStore.load(liveAgents: live)
+            await MainActor.run { self.recentSessions = sessions }
+        }
     }
 
     var statusTitle: String {
@@ -352,7 +645,7 @@ final class BeaconModel: ObservableObject {
         case .idle:
             return keepAwakeEnabled ? "bird.fill" : "bird"
         case .running:
-            return "bird.fill"
+            return pulseOn ? "bird.fill" : "bird"
         case .completed:
             return "checkmark.circle.fill"
         case .interrupted:
@@ -408,12 +701,41 @@ final class BeaconModel: ObservableObject {
     }
 
     private static let alertVolumeKey = "alertVolume"
+    private static let soundProfileKey = "soundProfile"
+    private static let customSoundsKey = "customSoundNames"
+
+    private static func loadCustomSoundNames() -> [String: String] {
+        let stored = UserDefaults.standard.dictionary(forKey: customSoundsKey) as? [String: String]
+        var names = defaultCustomNames
+        if let stored {
+            for (key, value) in stored where systemSoundNames.contains(value) {
+                names[key] = value
+            }
+        }
+        return names
+    }
+
+    private static let durationFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute, .second]
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 2
+        return formatter
+    }()
 
     private static func loadAlertVolume() -> Double {
         if UserDefaults.standard.object(forKey: alertVolumeKey) == nil {
             return 0.65
         }
         return clampAlertVolume(UserDefaults.standard.double(forKey: alertVolumeKey))
+    }
+
+    private static func loadSoundProfile() -> BuguSoundProfile {
+        guard let raw = UserDefaults.standard.string(forKey: soundProfileKey),
+              let profile = BuguSoundProfile(rawValue: raw) else {
+            return .system
+        }
+        return profile
     }
 
     private static func clampAlertVolume(_ value: Double) -> Double {
@@ -441,6 +763,7 @@ final class BeaconModel: ObservableObject {
         lastEventMessage = "Accepted: task is now being watched. Heartbeat every \(heartbeatLabel)."
         playCue(.accepted)
         scheduleHeartbeat()
+        startPulse()
     }
 
     func playRunning() {
@@ -448,6 +771,7 @@ final class BeaconModel: ObservableObject {
         lastEventMessage = "Running: task heartbeat cue."
         playCue(.running)
         scheduleHeartbeat()
+        startPulse()
     }
 
     func startSimulatedAgent() {
@@ -482,6 +806,7 @@ final class BeaconModel: ObservableObject {
     func stopWatching() {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        stopPulse()
         stopAgentWatcher()
         taskState = .idle
         lastEventMessage = "Stopped watching. Bugu is idle."
@@ -490,6 +815,7 @@ final class BeaconModel: ObservableObject {
     func markCompleted() {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        stopPulse()
         taskState = .completed(finishedAt: Date())
         lastEventMessage = "Done: task completed."
         playCue(.completed)
@@ -498,6 +824,7 @@ final class BeaconModel: ObservableObject {
     func markInterrupted() {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        stopPulse()
         taskState = .interrupted(finishedAt: Date())
         lastEventMessage = "Interrupted: task stopped unexpectedly."
         playCue(.interrupted)
@@ -506,6 +833,7 @@ final class BeaconModel: ObservableObject {
     func playPermissionNeeded() {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        stopPulse()
         taskState = .permissionNeeded(at: Date())
         lastEventMessage = "Permission needed: waiting for user approval."
         playCue(.permissionNeeded)
@@ -513,8 +841,12 @@ final class BeaconModel: ObservableObject {
 
     func playHeartbeat() {
         guard case .running = taskState else {
+            // No task is running, so there is nothing to announce. Tear down the stray
+            // timer instead of beeping — previously this branch still played a sound,
+            // which made Bugu chirp even when idle.
+            heartbeatTimer?.invalidate()
+            heartbeatTimer = nil
             lastEventMessage = "Heartbeat skipped because no task is running."
-            playCue(.running)
             return
         }
         lastEventMessage = "Heartbeat: coding task is still running."
@@ -526,6 +858,10 @@ final class BeaconModel: ObservableObject {
         heartbeatTimer = nil
         agentScanTimer?.invalidate()
         agentScanTimer = nil
+        pulseTimer?.invalidate()
+        pulseTimer = nil
+        hookWatcher?.stop()
+        hookWatcher = nil
         if simulatedAgentProcess?.isRunning == true {
             simulatedAgentProcess?.terminate()
         }
@@ -538,10 +874,16 @@ final class BeaconModel: ObservableObject {
         activeAgents = snapshot
         knownAgentPIDs = Set(snapshot.map(\.pid))
         announcedAgentPIDs.removeAll()
+        // Treat agents already running at baseline as started "now" so the menu can
+        // show an approximate runtime instead of nothing.
+        let now = Date()
+        for agent in snapshot {
+            watchedAgentStartTimes[agent.pid] = now
+        }
         lastEventMessage = "Watching coding agents. Baseline: \(snapshot.count) active."
 
         agentScanTimer?.invalidate()
-        agentScanTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+        agentScanTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.scanAgents()
             }
@@ -569,12 +911,22 @@ final class BeaconModel: ObservableObject {
         activeAgents = snapshot
 
         if !newAgents.isEmpty {
+            // Only treat this as a *new session* (and play the start cue) when no agents
+            // were being tracked before. Agents constantly spawn short-lived child
+            // processes that also match our signatures; without this guard every one of
+            // them re-triggered the "accepted" sound on each 3s scan.
+            let wasIdle = announcedAgentPIDs.isEmpty
             announcedAgentPIDs.formUnion(newAgents.map(\.pid))
             let now = Date()
             for agent in newAgents {
                 watchedAgentStartTimes[agent.pid] = now
             }
-            handleAgentStarted(newAgents)
+            if wasIdle && !hooksRecentlyActive {
+                handleAgentStarted(newAgents)
+            } else if !wasIdle {
+                let names = newAgents.map(\.name).joined(separator: ", ")
+                lastEventMessage = "Additional agent detected: \(names)."
+            }
         }
 
         if !endedAnnouncedPIDs.isEmpty {
@@ -590,7 +942,10 @@ final class BeaconModel: ObservableObject {
             }
             announcedAgentPIDs.subtract(endedAnnouncedPIDs)
             if announcedAgentPIDs.isEmpty {
-                if shortLivedCount > 0 {
+                if hooksRecentlyActive {
+                    // Hooks own state/sound right now; just fall idle quietly.
+                    taskState = .idle
+                } else if shortLivedCount > 0 {
                     handleWatchedAgentsInterrupted(count: endedAnnouncedPIDs.count)
                 } else {
                     handleWatchedAgentsCompleted(count: endedAnnouncedPIDs.count)
@@ -601,11 +956,20 @@ final class BeaconModel: ObservableObject {
         }
 
         knownAgentPIDs = currentPIDs
+
+        // Refresh the session list the moment the live set changes, so green dots and
+        // new sessions appear promptly instead of only when the menu is next opened.
+        if !newPIDs.isEmpty || !endedAnnouncedPIDs.isEmpty {
+            refreshSessions()
+        }
     }
 
     private func handleAgentStarted(_ agents: [AgentProcess]) {
         if !keepAwakeEnabled {
+            // The watcher (not the user) is enabling keep-awake, so remember to
+            // release it automatically when all watched agents finish.
             keepAwakeEnabled = true
+            autoAwakeEngaged = true
             startPowerAssertions()
         }
         taskState = .running(startedAt: Date())
@@ -613,22 +977,57 @@ final class BeaconModel: ObservableObject {
         lastEventMessage = "Detected agent start: \(names). Heartbeat every \(heartbeatLabel)."
         playCue(.accepted)
         scheduleHeartbeat()
+        startPulse()
     }
 
     private func handleWatchedAgentsCompleted(count: Int) {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        stopPulse()
+        let released = releaseAutoAwakeIfNeeded()
         taskState = .completed(finishedAt: Date())
         lastEventMessage = "\(count) watched agent process ended."
+            + (released ? " Keep-awake released automatically." : "")
         playCue(.completed)
     }
 
     private func handleWatchedAgentsInterrupted(count: Int) {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        stopPulse()
+        let released = releaseAutoAwakeIfNeeded()
         taskState = .interrupted(finishedAt: Date())
         lastEventMessage = "\(count) watched agent process stopped too quickly."
+            + (released ? " Keep-awake released automatically." : "")
         playCue(.interrupted)
+    }
+
+    /// Releases keep-awake only if the watcher engaged it (never overrides a manual
+    /// keep-awake the user turned on themselves). Returns whether it released.
+    @discardableResult
+    private func releaseAutoAwakeIfNeeded() -> Bool {
+        guard autoAwakeEngaged else { return false }
+        autoAwakeEngaged = false
+        stopPowerAssertions()
+        return true
+    }
+
+    // MARK: - Menu bar pulse
+
+    private func startPulse() {
+        guard pulseTimer == nil else { return }
+        pulseOn = true
+        pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.pulseOn.toggle()
+            }
+        }
+    }
+
+    private func stopPulse() {
+        pulseTimer?.invalidate()
+        pulseTimer = nil
+        pulseOn = false
     }
 
     private func startPowerAssertions() {
@@ -691,10 +1090,13 @@ final class BeaconModel: ObservableObject {
     }()
 }
 
-struct AgentProcess: Identifiable, Hashable {
+struct AgentProcess: Identifiable, Hashable, Sendable {
     let pid: Int32
     let name: String
     let command: String
+    /// Controlling terminal (e.g. "ttys001"), or nil for processes without one.
+    /// Used to collapse an agent's child processes that share the same tab.
+    let tty: String?
 
     var id: Int32 { pid }
 }
@@ -705,18 +1107,33 @@ private enum AgentProcessScanner {
         let patterns: [String]
     }
 
+    // Full agent roster, modelled on the set competitors like Vibe Island support.
+    // Order matters: the first matching signature wins, so more specific patterns
+    // (path fragments, hyphenated names) come before bare-word fallbacks. Short or
+    // common names use word-boundary regexes to limit false positives; the dedup,
+    // cwd-matching and ignore list further suppress noise.
     private static let signatures: [Signature] = [
         Signature(name: "Codex", patterns: ["codex-agent-sim", #"(^|[/\s])codex($|\s)"#]),
         Signature(name: "Claude Code", patterns: [#"(^|[/\s])claude($|\s)"#]),
-        Signature(name: "OpenCode", patterns: [#"(^|[/\s])opencode($|\s)"#]),
+        Signature(name: "Kimi Code", patterns: [".kimi-code/", "kimi-code", #"(^|[/\s])kimi($|\s)"#]),
+        Signature(name: "OpenCode", patterns: [".opencode/", #"(^|[/\s])opencode($|\s)"#]),
+        Signature(name: "Gemini CLI", patterns: [#"(^|[/\s])gemini($|\s)"#]),
+        Signature(name: "Cursor Agent", patterns: ["cursor-agent"]),
+        Signature(name: "Qwen Code", patterns: ["qwen-code", #"(^|[/\s])qwen($|\s)"#]),
+        Signature(name: "Trae", patterns: ["trae-agent", #"(^|[/\s])trae($|\s)"#]),
+        Signature(name: "Droid", patterns: ["factory-droid", #"(^|[/\s])droid($|\s)"#]),
+        Signature(name: "Qoder", patterns: [#"(^|[/\s])qoder($|\s)"#]),
+        Signature(name: "Mistral Vibe", patterns: ["mistral-vibe", "mistral_vibe"]),
+        Signature(name: "CodeBuddy", patterns: [".codebuddy/", "codebuddy"]),
+        Signature(name: "WorkBuddy", patterns: ["workbuddy"]),
+        Signature(name: "Hermes", patterns: ["hermes-agent", "hermes-cli", #"(^|[/\s])hermes($|\s)"#]),
+        Signature(name: "Pi Agent", patterns: ["pi-agent"]),
+        Signature(name: "Kiro CLI", patterns: ["kiro-cli", #"(^|[/\s])kiro($|\s)"#]),
         Signature(name: "Aider", patterns: [#"(^|[/\s])aider($|\s)"#]),
         Signature(name: "Goose", patterns: [#"(^|[/\s])goose($|\s)"#]),
-        Signature(name: "Gemini CLI", patterns: [#"(^|[/\s])gemini($|\s)"#]),
         Signature(name: "Amp", patterns: [#"(^|[/\s])amp($|\s)"#]),
-        Signature(name: "Qwen Code", patterns: [#"(^|[/\s])qwen($|\s)"#, #"(^|[/\s])qwen-code($|\s)"#]),
         Signature(name: "Crush", patterns: [#"(^|[/\s])crush($|\s)"#]),
         Signature(name: "Devin", patterns: [#"(^|[/\s])devin($|\s)"#]),
-        Signature(name: "Cursor Agent", patterns: ["cursor-agent"]),
         Signature(name: "OpenHands", patterns: ["openhands"])
     ]
 
@@ -724,7 +1141,7 @@ private enum AgentProcessScanner {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,command="]
+        process.arguments = ["-axo", "pid=,tty=,command="]
         process.standardOutput = pipe
         process.standardError = Pipe()
 
@@ -740,31 +1157,56 @@ private enum AgentProcessScanner {
             return []
         }
 
-        return output
+        let matched = output
             .split(separator: "\n", omittingEmptySubsequences: true)
             .compactMap(parseLine)
             .filter { !shouldIgnore(command: $0.command) }
-            .compactMap { process in
-                guard let name = matchedAgentName(command: process.command) else {
+            .compactMap { entry -> AgentProcess? in
+                guard let name = matchedAgentName(command: entry.command) else {
                     return nil
                 }
-                return AgentProcess(pid: process.pid, name: name, command: process.command)
+                return AgentProcess(pid: entry.pid, name: name, command: entry.command, tty: entry.tty)
             }
             .sorted { $0.pid < $1.pid }
+
+        // Collapse one logical session to a single entry: an agent spawns many
+        // child processes that share its controlling terminal, and listing each
+        // one separately both clutters the UI and (before this) re-fired sounds.
+        // Group by (tty, name) and keep the lowest-PID representative. Processes
+        // without a tty are kept individually since we cannot prove they belong
+        // to the same session.
+        var representatives: [String: AgentProcess] = [:]
+        for agent in matched {
+            let key: String
+            if let tty = agent.tty {
+                key = "tty:\(tty)|\(agent.name)"
+            } else {
+                key = "pid:\(agent.pid)"
+            }
+            if representatives[key] == nil {
+                representatives[key] = agent
+            }
+        }
+
+        return representatives.values.sorted { $0.pid < $1.pid }
     }
 
-    private static func parseLine(_ line: Substring) -> (pid: Int32, command: String)? {
+    private static func parseLine(_ line: Substring) -> (pid: Int32, tty: String?, command: String)? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let firstSpace = trimmed.firstIndex(where: { $0 == " " || $0 == "\t" }) else {
+        // Columns: PID TTY COMMAND (COMMAND may itself contain spaces).
+        let parts = trimmed.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+        guard parts.count == 3, let pid = Int32(parts[0]) else {
             return nil
         }
 
-        let pidText = trimmed[..<firstSpace]
-        let command = trimmed[firstSpace...].trimmingCharacters(in: .whitespaces)
-        guard let pid = Int32(pidText), !command.isEmpty else {
+        let rawTTY = String(parts[1])
+        // ps prints "??" for processes without a controlling terminal.
+        let tty: String? = (rawTTY == "??" || rawTTY.isEmpty) ? nil : rawTTY
+        let command = String(parts[2]).trimmingCharacters(in: .whitespaces)
+        guard !command.isEmpty else {
             return nil
         }
-        return (pid, command)
+        return (pid, tty, command)
     }
 
     private static func shouldIgnore(command: String) -> Bool {
@@ -780,6 +1222,23 @@ private enum AgentProcessScanner {
             "node_repl",
             "codex_chronicle",
             "codex app-server",
+            // Codex / Claude internal background machinery, not user-launched tasks.
+            // This mirrors the built-in filter list competitors (e.g. Vibe Island)
+            // ship: memory writers, consolidation, guardian/auto-review, chronicle,
+            // and the Claude-Mem background plugin all run as headless agent
+            // processes that should never count as a live coding session.
+            "chronicle",
+            "screen_recording",
+            "x-openai-memgen",
+            "codex remote ssh",
+            "memory writer",
+            "memory consolidation",
+            "memgen",
+            "autoreview",
+            "auto-review",
+            "guardian",
+            "claude-mem",
+            "claudemem",
             "rg -i",
             "ps -axo"
         ]
@@ -799,39 +1258,5 @@ private enum AgentProcessScanner {
             }
         }
         return nil
-    }
-}
-
-private final class BuguSoundEngine {
-    enum Cue {
-        case accepted
-        case running
-        case completed
-        case interrupted
-        case permissionNeeded
-    }
-
-    func play(_ cue: Cue, volume: Float) {
-        let clampedVolume = min(max(volume, 0.2), 1.0)
-        guard let sound = NSSound(named: soundName(for: cue)) else {
-            return
-        }
-        sound.volume = clampedVolume
-        sound.play()
-    }
-
-    private func soundName(for cue: Cue) -> NSSound.Name {
-        switch cue {
-        case .accepted:
-            return NSSound.Name("Funk")
-        case .running:
-            return NSSound.Name("Hero")
-        case .completed:
-            return NSSound.Name("Blow")
-        case .interrupted:
-            return NSSound.Name("Basso")
-        case .permissionNeeded:
-            return NSSound.Name("Ping")
-        }
     }
 }

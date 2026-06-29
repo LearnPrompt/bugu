@@ -149,7 +149,35 @@ def draw_icon(size: int) -> Image.Image:
     return image
 
 
+def generate_from_source(source_path: Path) -> None:
+    """Generate icon sizes from a user-provided source image."""
+    source = Image.open(source_path).convert("RGBA")
+    # Center-crop to a square if needed.
+    width, height = source.size
+    if width != height:
+        min_dim = min(width, height)
+        left = (width - min_dim) // 2
+        top = (height - min_dim) // 2
+        source = source.crop((left, top, left + min_dim, top + min_dim))
+
+    ASSET_DIR.mkdir(parents=True, exist_ok=True)
+    ICONSET_DIR.mkdir(parents=True, exist_ok=True)
+
+    for filename, size in SIZES.items():
+        icon = source.resize((size, size), Image.Resampling.LANCZOS)
+        icon.save(ICONSET_DIR / filename)
+
+    source.resize((1024, 1024), Image.Resampling.LANCZOS).save(PREVIEW_PATH)
+    print(f"Wrote {ICONSET_DIR} from {source_path}")
+    print(f"Wrote {PREVIEW_PATH}")
+
+
 def main() -> None:
+    source_path = ASSET_DIR / "logo-source.png"
+    if source_path.exists():
+        generate_from_source(source_path)
+        return
+
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     ICONSET_DIR.mkdir(parents=True, exist_ok=True)
 

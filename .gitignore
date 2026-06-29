@@ -3,3 +3,6 @@
 dist/
 Assets/AppIcon.icns
 Assets/AppIcon.iconset/
+
+# Internal working docs, drafts, and handoffs — kept local, never published.
+docs/
