@@ -158,12 +158,36 @@ private struct BeaconMenuView: View {
                         Text("Recent sessions")
                             .font(.caption.bold())
                         Spacer()
-                        Text("green = live · click to jump")
+                        Text("each task shows its state · click to jump")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(model.recentSessions) { session in
-                        SessionRow(session: session, relativeTime: model.relativeTime(session.lastActivity))
+                    ForEach(model.currentSessions) { session in
+                        SessionRow(
+                            session: session,
+                            relativeTime: model.relativeTime(session.lastActivity),
+                            symbol: model.sessionSymbol(session),
+                            color: model.sessionColor(session)
+                        )
+                    }
+                    if model.currentSessions.isEmpty {
+                        Text("No active sessions.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    // Fold away older/expired sessions so the menu stays short.
+                    if !model.olderSessions.isEmpty {
+                        DisclosureGroup("Older (\(model.olderSessions.count))") {
+                            ForEach(model.olderSessions) { session in
+                                SessionRow(
+                                    session: session,
+                                    relativeTime: model.relativeTime(session.lastActivity),
+                                    symbol: model.sessionSymbol(session),
+                                    color: model.sessionColor(session)
+                                )
+                            }
+                        }
+                        .font(.caption2)
                     }
                 }
             }
@@ -212,6 +236,8 @@ private struct BeaconMenuView: View {
 private struct SessionRow: View {
     let session: RecentSession
     let relativeTime: String
+    let symbol: String
+    let color: Color
 
     var body: some View {
         Button {
@@ -224,9 +250,10 @@ private struct SessionRow: View {
             )
         } label: {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(session.isActive ? Color.green : Color.secondary.opacity(0.4))
-                    .frame(width: 7, height: 7)
+                Image(systemName: symbol)
+                    .font(.caption2)
+                    .foregroundStyle(color)
+                    .frame(width: 12)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(session.projectName)
                         .font(.caption)
@@ -435,6 +462,9 @@ final class BeaconModel: ObservableObject {
     /// Per-session phase from hooks, keyed by session identity, so concurrent agents
     /// are tracked independently and the menu-bar state is their aggregate.
     private var hookSessions: [String: (phase: SessionPhase, at: Date)] = [:]
+    /// Latest hook phase per project dir, used to badge each row in the session list
+    /// with its own state (so an "interrupted" chirp points to a specific task).
+    private var hookPhaseByProject: [String: (phase: SessionPhase, at: Date)] = [:]
     /// When the last hook event arrived. While recent, the `ps` poller defers to hooks
     /// for state and sounds so the two paths don't double-fire.
     private var lastHookEventAt: Date = .distantPast
@@ -525,6 +555,15 @@ final class BeaconModel: ObservableObject {
         } else {
             hookSessions[key] = (phase: phase, at: Date())
         }
+        // Mirror the phase onto the project dir so the session list can badge this
+        // exact task with its own state.
+        if let cwd = event.cwd, !cwd.isEmpty {
+            if phase == .ended {
+                hookPhaseByProject.removeValue(forKey: cwd)
+            } else {
+                hookPhaseByProject[cwd] = (phase: phase, at: Date())
+            }
+        }
 
         // Per-session sound on a meaningful transition (deduped against the prior phase).
         switch action {
@@ -572,6 +611,7 @@ final class BeaconModel: ObservableObject {
         // can't pin Bugu to "running" forever.
         let staleCutoff = Date().addingTimeInterval(-30 * 60)
         hookSessions = hookSessions.filter { $0.value.at > staleCutoff }
+        hookPhaseByProject = hookPhaseByProject.filter { $0.value.at > staleCutoff }
 
         let phases = hookSessions.values
         if phases.contains(where: { $0.phase == .permission }) {
@@ -683,6 +723,34 @@ final class BeaconModel: ObservableObject {
         Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
+    /// Live or recently-active sessions, shown expanded.
+    var currentSessions: [RecentSession] { recentSessions.filter(\.isCurrent) }
+    /// Older/expired sessions, folded behind a disclosure to keep the menu short.
+    var olderSessions: [RecentSession] { recentSessions.filter { !$0.isCurrent } }
+
+    /// Per-row status icon, reusing the menu bar's five-state vocabulary so each task
+    /// carries the same brand language as the global state.
+    func sessionSymbol(_ s: RecentSession) -> String {
+        switch s.displayPhase {
+        case .running: return "bird.fill"
+        case .permission: return "hand.raised.fill"
+        case .done, .ended: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .none: return s.isActive ? "bird.fill" : "circle.fill"
+        }
+    }
+
+    /// Per-row status colour matching `sessionSymbol`.
+    func sessionColor(_ s: RecentSession) -> Color {
+        switch s.displayPhase {
+        case .running: return .blue
+        case .permission: return .orange
+        case .done, .ended: return .green
+        case .failed: return .red
+        case .none: return s.isActive ? .blue : Color.secondary.opacity(0.4)
+        }
+    }
+
     /// Reloads the recent-session list off the main thread (transcript reads + lsof).
     /// Debounced: rapid callers (e.g. a burst of hook events) collapse into a single
     /// reload so we don't hammer the disk and `lsof` on every PostToolUse.
@@ -694,10 +762,19 @@ final class BeaconModel: ObservableObject {
             }
             guard !Task.isCancelled, let self else { return }
             let live = self.activeAgents
-            let sessions = await Task.detached(priority: .utility) {
+            var sessions = await Task.detached(priority: .utility) {
                 RecentSessionStore.load(liveAgents: live)
             }.value
             guard !Task.isCancelled else { return }
+            // Overlay each session's own latest hook state (matched by project dir).
+            let phases = self.hookPhaseByProject
+            sessions = sessions.map { session in
+                var session = session
+                if !session.projectPath.isEmpty, let entry = phases[session.projectPath] {
+                    session.displayPhase = entry.phase
+                }
+                return session
+            }
             self.recentSessions = sessions
         }
     }

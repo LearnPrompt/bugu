@@ -16,8 +16,15 @@ struct RecentSession: Identifiable, Hashable, Sendable {
     /// Set when the session is matched to a running agent process (i.e. it is live).
     var pid: Int32?
     var command: String?
+    /// The session's own latest state, overlaid from recent hook events (by project
+    /// dir). Drives the per-row status icon so each task carries its own state.
+    var displayPhase: SessionPhase?
 
     var isActive: Bool { pid != nil }
+
+    /// Whether this row should be shown expanded (live or recently active) vs folded
+    /// away as an older/expired session.
+    var isCurrent: Bool { isActive || displayPhase != nil }
 
     var projectName: String {
         let name = (projectPath as NSString).lastPathComponent

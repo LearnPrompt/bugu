@@ -9,7 +9,7 @@ enum HookAction: Equatable {
 
 /// The lasting state of a single tracked agent session (vs `HookAction`, which is a
 /// momentary event). Used to track concurrent sessions independently.
-enum SessionPhase: Equatable {
+enum SessionPhase: Equatable, Sendable {
     case running, permission, done, failed, ended
 
     init(_ action: HookAction) {
